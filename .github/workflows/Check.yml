@@ -1,0 +1,70 @@
+name: Check OpenSSL Libraries
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/check-libraries.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binutils file
+
+      - name: Download libraries
+        run: |
+          set -eu
+          mkdir -p libs
+          curl -fL "https://raw.githubusercontent.com/jafarfcb10s-hash/Zombie/openssl-build/libssl.so" -o libs/libssl.so
+          curl -fL "https://raw.githubusercontent.com/jafarfcb10s-hash/Zombie/openssl-build/libcrypto.so" -o libs/libcrypto.so
+
+      - name: Check file types
+        run: |
+          echo "===== FILE TYPES ====="
+          file libs/*
+
+      - name: Check architecture
+        run: |
+          echo "===== LIBSSL HEADER ====="
+          readelf -h libs/libssl.so
+          echo "===== LIBCRYPTO HEADER ====="
+          readelf -h libs/libcrypto.so
+
+      - name: Check dependencies
+        run: |
+          echo "===== LIBSSL DEPENDENCIES ====="
+          readelf -d libs/libssl.so | grep NEEDED || true
+          echo "===== LIBCRYPTO DEPENDENCIES ====="
+          readelf -d libs/libcrypto.so | grep NEEDED || true
+
+      - name: Check required SSL symbols
+        run: |
+          echo "===== SSLv3_server_method ====="
+          nm -D --defined-only libs/libssl.so | grep SSLv3_server_method || true
+
+          echo "===== SSL FUNCTIONS ====="
+          nm -D --defined-only libs/libssl.so | grep -E 'SSL_read|SSL_write|SSL_CTX_new|SSL_new|SSL_do_handshake|SSL_set_fd' || true
+
+      - name: Check Crypto symbols
+        run: |
+          echo "===== CRYPTO VERSION ====="
+          nm -D --defined-only libs/libcrypto.so | grep -E 'OpenSSL_version|SSLeay|EVP_sha256|RSA_new|AES_encrypt' || true
+
+          echo "===== CRYPTO ARCHITECTURE ====="
+          readelf -A libs/libcrypto.so
+
+          echo "===== SSL ARCHITECTURE ====="
+          readelf -A libs/libssl.so
+
+      - name: Check OpenSSL version
+        run: |
+          echo "===== OPENSSL VERSION ====="
+          strings libs/libcrypto.so | grep -m 5 -E 'OpenSSL 1\.0\.2|OpenSSL 3\.' || true
