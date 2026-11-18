@@ -1,0 +1,121 @@
+name: Build OpenSSL for Zombie Smash
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y perl make unzip curl binutils
+
+      - name: Download NDK r16b
+        run: |
+          curl -fL --retry 3 \
+            https://dl.google.com/android/repository/android-ndk-r16b-linux-x86_64.zip \
+            -o ndk.zip
+
+          unzip -q ndk.zip
+
+      - name: Download OpenSSL 1.0.2u
+        run: |
+          curl -fL --retry 3 \
+            https://github.com/openssl/openssl/archive/refs/tags/OpenSSL_1_0_2u.tar.gz \
+            -o openssl.tar.gz
+
+          mkdir openssl
+          tar -xzf openssl.tar.gz -C openssl
+
+      - name: Check Android NDK
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          NDK="$GITHUB_WORKSPACE/android-ndk-r16b"
+
+          echo "Checking NDK platforms..."
+
+          ls -la "$NDK/platforms/"
+
+          SYSROOT=""
+
+          for API in 21 19 18 17 16 15 14; do
+            CANDIDATE="$NDK/platforms/android-$API/arch-arm/usr"
+
+            if [ -f "$CANDIDATE/include/stdlib.h" ]; then
+              SYSROOT="$CANDIDATE"
+              echo "Found sysroot: $SYSROOT"
+              break
+            fi
+          done
+
+          if [ -z "$SYSROOT" ]; then
+            echo "ERROR: Android ARM sysroot not found"
+            find "$NDK/platforms" -name stdlib.h
+            exit 1
+          fi
+
+          echo "ANDROID_SYSROOT=$SYSROOT" >> "$GITHUB_ENV"
+
+      - name: Build ARM libraries
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          NDK="$GITHUB_WORKSPACE/android-ndk-r16b"
+
+          TOOL="$NDK/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/bin"
+
+          export ANDROID_DEV="$ANDROID_SYSROOT"
+
+          export PATH="$TOOL:$PATH"
+
+          export CC=arm-linux-androideabi-gcc
+          export AR=arm-linux-androideabi-ar
+          export RANLIB=arm-linux-androideabi-ranlib
+          export NM=arm-linux-androideabi-nm
+
+          export CFLAG="-fPIC -DOPENSSL_PIC -DOPENSSL_THREADS -D_REENTRANT -DDSO_DLFCN -DHAVE_DLFCN_H -mandroid -march=armv5te -msoft-float -I$ANDROID_DEV/include -B$ANDROID_DEV/lib -O2 -fomit-frame-pointer -Wall"
+
+          cd openssl/openssl-OpenSSL_1_0_2u
+
+          ./Configure android shared
+
+          make depend
+          make -j2
+
+          mkdir -p "$GITHUB_WORKSPACE/result"
+
+          cp -L libcrypto.so "$GITHUB_WORKSPACE/result/libcrypto.so"
+          cp -L libssl.so "$GITHUB_WORKSPACE/result/libssl.so"
+
+      - name: Verify libraries
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          file result/libcrypto.so
+          file result/libssl.so
+
+          readelf -h result/libcrypto.so
+          readelf -h result/libssl.so
+
+          readelf -Ws result/libssl.so | grep SSLv3_server_method
+
+          readelf -d result/libssl.so
+          readelf -d result/libcrypto.so
+
+      - name: Upload libraries
+        uses: actions/upload-artifact@v4
+        with:
+          name: openssl-1.0.2u-armeabi-libs
+          path: result/
+          if-no-files-found: error
+          retention-days: 14
